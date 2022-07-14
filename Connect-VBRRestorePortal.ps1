@@ -12,6 +12,28 @@ $M365GroupDesc = "Group membership enables members to login to the 5G Networks V
 
 Start-Transcript -Path .\VBRRestorePortal_Log.txt -Append
 
+function Connect-AAD {
+
+  [CmdletBinding()]
+  param(
+  [Parameter(Mandatory = $true)]
+  [string]$tenantid
+  )
+
+  try {
+    Write-Verbose "Connecting to Microsoft Azure account"
+    Connect-AzAccount -Tenant $tenantid -ErrorAction Stop | Out-Null
+    $script:context = Get-AzContext
+    Write-Verbose "Connecting to Azure AD account"
+    Connect-AzureAD -TenantId $context.Tenant.TenantId -AccountId $context.Account.Id -ErrorAction Stop | Out-Null
+    Write-Host "$($context.Account.Id) is now connected to Microsoft Azure for $($context.Tenant.Id)" -ForegroundColor Green
+  }
+  catch {
+    Write-Error "An issue occurred while logging into Microsoft. Please double-check your credentials and ensure you have sufficient access."
+    throw $_
+  }
+}
+
 function Connect-VB365RestorePortal {
   <#
 .SYNOPSIS
@@ -71,13 +93,14 @@ function Connect-VB365RestorePortal {
   param(
     [Parameter(Mandatory = $true)]
     [string]$ApplicationId,
-    [string]$tenantid
+    [string]$tenantid,
+    [array]$context
   )
 
   # check if Enterprise Application already exists
   $sp = Get-AzureADServicePrincipal -Filter "AppId eq '$ApplicationId'"
   if ($sp) {
-    Write-Verbose "Enterprise Application ($ApplicationId) already exists"
+    Write-Host "Enterprise Application ($ApplicationId) already exists" -ForegroundColor Yellow
   }
   else {
     # creating link to Service Provider Enterprise Application
@@ -171,7 +194,23 @@ function Add-RestoreOperators {
   }
 }
 
-Write-Host "Installing required Azure PowerShell modules...Az.Accounts, AzureAd & MSonline"
+function Add-VBORestoreOperators {
+
+  [CmdletBinding()]
+  param(
+  [Parameter(Mandatory = $true)]
+  [string]$domain,
+  [string]$M365GroupName
+  )
+
+  # Add the required security group to VEEAM Restore Operators settings
+  $org = Get-VBOOrganization -Name "$domain"
+  $group = Get-VBOOrganizationGroup -Organization $org -DisplayName $M365GroupName
+  $restoreoperator = New-VBORbacOperator -Group $Group
+  Add-VBORbacRole -Organization $org -Name "$domain Restore Operators" -Operators $restoreoperator -EntireOrganization -Description "Restore operators for entire organiastion - $domain" | Out-Null
+}
+
+Write-Host "Installing required PowerShell modules"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Find-PackageProvider -Name Nuget -ForceBootstrap -IncludeDependencies -Force | Out-Null
 
@@ -190,39 +229,42 @@ if ( -not(Get-Module -ListAvailable -Name AzureAd)){
   Write-Host "AzureAD module already present" -ForegroundColor Green
 }
 
-# Confirm that the MSOnline modile is installed
+# Confirm that the MSOnline module is already present
 if ( -not(Get-Module -ListAvailable -Name MSOnline)){
-    Install-Module MSOnline
+    Install-Module MSOnline -SkipPublisherCheck -Force -ErrorAction Stop
+    Write-Host "MSOnline module installed successfully" -ForegroundColor Green
 } else {
     Write-Host "MSOnline module already present" -ForegroundColor Green
 }
 
-# Connect to the MS Online service & Azure AD
+# Confirm that the VEEAM Archiver module is already present
+if ( -not(Get-Module -ListAvailable -Name Veeam.Archiver.PowerShell)){
+  Write-Host "You are not running this on the VBO server - addition of the restore operators group will be skipped." -ForegroundColor Yellow
+  $VBOPS = $false
+} else {
+  Write-Host "VEEAM Archiver Powershell module already present" -ForegroundColor Green
+}
+
+
+# Connect to the MS Online service
   try {
     Write-Verbose "Connecting to Microsoft Online account"
     Connect-MsolService -ErrorAction Stop | Out-Null
-    Write-Verbose "Connecting to Microsoft Azure account"
-    Connect-AzAccount -Tenant $tenantid -ErrorAction Stop | Out-Null
-    $context = Get-AzContext
-    Write-Verbose "Connecting to Azure AD account"
-    Connect-AzureAD -TenantId $context.Tenant.TenantId -AccountId $context.Account.Id -ErrorAction Stop | Out-Null
-    Write-Host "$($context.Account.Id) is now connected to Microsoft Azure for $($context.Tenant.Id)" -ForegroundColor Green
   }
   catch {
     Write-Error "An issue occurred while logging into Microsoft. Please double-check your credentials and ensure you have sufficient access."
     throw $_
   }
 
-if ((Read-Host -Prompt "Would you like to import a CSV file?") -eq "Y") {
+if ((Read-Host -Prompt "Would you like to import a CSV file? (Y/N)") -eq "Y") {
   try {
     do {
       $csvPath = Read-Host -Prompt "Please enter the path and filename of the CSV file"
-    } until($csvPath -ne $null) { }
-
-    Write-Host "CSV Path: $csvPath" -ForegroundColor Green
-
+    } until($null -ne $csvPath) { }
+    
     try {
       $csvContents = Import-CSV -Path $csvPath -ErrorAction Stop
+      Write-Host "Imported CSV: $csvPath" -ForegroundColor Green
     } catch {
       Write-Host "Failed CSV Import: $_" -ForegroundColor Red
     }
@@ -230,7 +272,7 @@ if ((Read-Host -Prompt "Would you like to import a CSV file?") -eq "Y") {
     foreach ($domain in $csvContents) {
       # Collect Tenancy Information
       $tenantID = Get-MsolPartnerContract -DomainName $domain.Name | Select-Object -ExpandProperty TenantId
-      if ($tenantid -ne $null) {
+      if ($null -ne $tenantID) {
         Write-Host "Domain: "$domain.Name -ForegroundColor Green
         Write-Host "Tenant ID: "$tenantID -ForegroundColor Green
 
@@ -238,12 +280,24 @@ if ((Read-Host -Prompt "Would you like to import a CSV file?") -eq "Y") {
         $MSOLAdmins = Get-MsolRoleMember -RoleObjectId $(Get-MsolRole -RoleName "Company Administrator").ObjectId -TenantId $tenantID -ErrorAction Stop
 
         # Begin setup of the restore operators group via the function
-        Write-Host "Creating Restore Operators group" -ForegroundColor Green
-        Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins 
-
+        if (Get-MsolGroup -TenantID $tenantid -SearchString $M365GroupName) {
+          Write-Host "Group already exists - Proceeding!" -ForegroundColor Green
+        } else {
+          Write-Host "Creating Restore Operators group in Microsoft 365" -ForegroundColor Green
+          Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins 
+        }
+        
+        Connect-AAD -tenantid $tenantID
         # Begin setup of the restore portal application via the function
-        Write-Host "Creating VBR restore portal application" -ForegroundColor Green
-        Connect-VB365RestorePortal -ApplicationId $applicationId -tenantid $tenantID
+        Write-Host "Creating VBR restore portal application in Azure AD" -ForegroundColor Green
+        Connect-VB365RestorePortal -ApplicationId $applicationId -Tenantid $tenantID -context $context
+
+        # Begin setup of the restore operators group on the VBR server
+        if ($VBOPS -ne $false) {
+          Write-Host "Creating restore operators group in VBO" -ForegroundColor Green
+          Add-VBORestoreOperators -domain $domain.Name -M365GroupName $M365GroupName
+        }
+        Write-Host "Completed tenant" -ForegroundColor Green -BackgroundColor White
       } else {
         Write-Host $domain.Name " has not returned a tenant ID." -ForegroundColor Red
       }
@@ -256,33 +310,44 @@ if ((Read-Host -Prompt "Would you like to import a CSV file?") -eq "Y") {
 
   # Begin process to collect tenancy information to use with DAP and create security group for restore operators
   try {
-      do {
-          # Collect tenancy information, and loop until information is correct
-          $domain = Read-Host -Prompt "What is the clients 'onmicrosoft' domain name?"
-          $tenantid = Get-MsolPartnerContract -DomainName $domain | Select-Object -ExpandProperty TenantId
-          Write-Host "Domain: $domain" -ForegroundColor Green
-          Write-Host "Tenant ID: $tenantid" -ForegroundColor Green
-          if ((Read-Host -Prompt "Do these look correct? (Y/N)") -eq "N") {
-              Write-Host "Start again..." -ForegroundColor Red
-              $proceed = $false
-          } else {
-              $proceed = $true
-          }
-        } until($proceed) { }
+    do {
+        # Collect tenancy information, and loop until information is correct
+        $domain = Read-Host -Prompt "What is the clients 'onmicrosoft' domain name?"
+        $tenantid = Get-MsolPartnerContract -DomainName $domain | Select-Object -ExpandProperty TenantId
+        Write-Host "Domain: $domain" -ForegroundColor Green
+        Write-Host "Tenant ID: $tenantid" -ForegroundColor Green
+        if ((Read-Host -Prompt "Do these look correct? (Y/N)") -eq "N") {
+            Write-Host "Start again..." -ForegroundColor Red
+            $proceed = $false
+        } else {
+            $proceed = $true
+        }
+      } until($proceed) { }
 
-        # Get a list of the global admins in the environment, by default we are going to add these to the restore operators group 
-        $MSOLAdmins = Get-MsolRoleMember -RoleObjectId $(Get-MsolRole -RoleName "Company Administrator").ObjectId -TenantId $tenantid -ErrorAction Stop
-  
-        # Begin setup of the restore operators group via the function
-         Write-Host "Creating Restore Operators group" -ForegroundColor Green
-         Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins 
+      Connect-AAD -tenantid $tenantid
 
-        # Begin setup of the restore portal application via the function
-        Write-Host "Creating VBR restore portal application" -ForegroundColor Green
-        Connect-VB365RestorePortal -ApplicationId $applicationId -tenantid $tenantID
+      # Get a list of the global admins in the environment, we are going to add these to the restore operators group 
+      $MSOLAdmins = Get-MsolRoleMember -RoleObjectId $(Get-MsolRole -RoleName "Company Administrator").ObjectId -TenantId $tenantid -ErrorAction Stop
+    
+      # Begin setup of the restore operators group
+      if (-not(Get-MsolGroup -TenantID $tenantid -SearchString $M365GroupName)) {
+        Write-Host "Creating Restore Operators group in Microsoft 365" -ForegroundColor Green
+        Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins 
+      } else {
+        Write-Host "Group already exists - Proceeding!" -ForegroundColor Green
+      }
 
+      # Begin setup of the restore portal application
+      Write-Host "Creating VBR restore portal application in Azure AD" -ForegroundColor Green
+      Connect-VB365RestorePortal -ApplicationId $applicationId -Tenantid $tenantID -context $context
+
+      # Begin setup of the restore operators group on the VBR server
+      if ($VBOPS -ne $false) {
+        Write-Host "Creating restore operators group in VBO" -ForegroundColor Green
+        Add-VBORestoreOperators -domain $domain -M365GroupName $M365GroupName
+      }
   } catch {
-      Write-Host "Error: $_" -ForegroundColor Red
+    Write-Host "Error: $_" -ForegroundColor Red
   }
 }
 
