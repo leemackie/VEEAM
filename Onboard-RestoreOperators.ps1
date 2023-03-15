@@ -41,7 +41,7 @@ function Connect-VB365RestorePortal {
 
 .DESCRIPTION
   The script logs in to a tenant Microsoft 365 environment and grants the required permissions so the tenant can leverage a service provider's Veeam Backup for Microsoft 365 Restore Portal.
-	
+
 .PARAMETER ApplicationId
 	Service Provider (Enterprise Application) Application ID. THIS IS PROVIDED BY YOUR SERVICE PROVIDER.
 
@@ -133,7 +133,7 @@ function Connect-VB365RestorePortal {
       break
     }
     catch {
-      Write-Host "Waiting to grant admin consent... (this can take up to 15 minutes)" 
+      Write-Host "Waiting to grant admin consent... (this can take up to 15 minutes)"
       Write-Verbose "Error: $_"
       Start-Sleep -Seconds 5
     }
@@ -157,7 +157,7 @@ function Add-RestoreOperators {
 
 .DESCRIPTION
   This function creates a Restore Operators security group in Microsoft 365, and then adds members based on a passed MSOLAdmin array to the group automatically
-	
+
 .PARAMETER M365GroupName
 	The name of the group created in Microsoft 365
 
@@ -193,7 +193,6 @@ function Add-RestoreOperators {
       Add-MsolGroupMember -GroupObjectId $MSOLGroup.ObjectId -TenantId $tenantid -GroupMemberType User -GroupMemberObjectId $objID | Out-Null
   }
 }
-
 function Add-VBORestoreOperators {
 
   [CmdletBinding()]
@@ -207,7 +206,7 @@ function Add-VBORestoreOperators {
   $org = Get-VBOOrganization -Name "$domain"
   $group = Get-VBOOrganizationGroup -Organization $org -DisplayName $M365GroupName
   $restoreoperator = New-VBORbacOperator -Group $Group
-  Add-VBORbacRole -Organization $org -Name "$domain Restore Operators" -Operators $restoreoperator -EntireOrganization -Description "Restore operators for entire organiastion - $domain" | Out-Null
+  Add-VBORbacRole -Organization $org -Name "$domain Restore Operators" -Operators $restoreoperator -EntireOrganization -Description "Restore operators for entire organisation - $domain" | Out-Null
 }
 
 Write-Host "Installing required PowerShell modules"
@@ -261,14 +260,14 @@ if ((Read-Host -Prompt "Would you like to import a CSV file? (Y/N)") -eq "Y") {
     do {
       $csvPath = Read-Host -Prompt "Please enter the path and filename of the CSV file"
     } until($null -ne $csvPath) { }
-    
+
     try {
       $csvContents = Import-CSV -Path $csvPath -ErrorAction Stop
       Write-Host "Imported CSV: $csvPath" -ForegroundColor Green
     } catch {
       Write-Host "Failed CSV Import: $_" -ForegroundColor Red
     }
-    
+
     foreach ($domain in $csvContents) {
       # Collect Tenancy Information
       $tenantID = Get-MsolPartnerContract -DomainName $domain.Name | Select-Object -ExpandProperty TenantId
@@ -276,7 +275,7 @@ if ((Read-Host -Prompt "Would you like to import a CSV file? (Y/N)") -eq "Y") {
         Write-Host "Domain: "$domain.Name -ForegroundColor Green
         Write-Host "Tenant ID: "$tenantID -ForegroundColor Green
 
-        # Get a list of the global admins in the environment, by default we are going to add these to the restore operators group 
+        # Get a list of the global admins in the environment, by default we are going to add these to the restore operators group
         $MSOLAdmins = Get-MsolRoleMember -RoleObjectId $(Get-MsolRole -RoleName "Company Administrator").ObjectId -TenantId $tenantID -ErrorAction Stop
 
         # Begin setup of the restore operators group via the function
@@ -284,9 +283,9 @@ if ((Read-Host -Prompt "Would you like to import a CSV file? (Y/N)") -eq "Y") {
           Write-Host "Group already exists - Proceeding!" -ForegroundColor Green
         } else {
           Write-Host "Creating Restore Operators group in Microsoft 365" -ForegroundColor Green
-          Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins 
+          Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins
         }
-        
+
         Connect-AAD -tenantid $tenantID
         # Begin setup of the restore portal application via the function
         Write-Host "Creating VBR restore portal application in Azure AD" -ForegroundColor Green
@@ -326,13 +325,13 @@ if ((Read-Host -Prompt "Would you like to import a CSV file? (Y/N)") -eq "Y") {
 
       Connect-AAD -tenantid $tenantid
 
-      # Get a list of the global admins in the environment, we are going to add these to the restore operators group 
+      # Get a list of the global admins in the environment, we are going to add these to the restore operators group
       $MSOLAdmins = Get-MsolRoleMember -RoleObjectId $(Get-MsolRole -RoleName "Company Administrator").ObjectId -TenantId $tenantid -ErrorAction Stop
-    
+
       # Begin setup of the restore operators group
       if (-not(Get-MsolGroup -TenantID $tenantid -SearchString $M365GroupName)) {
         Write-Host "Creating Restore Operators group in Microsoft 365" -ForegroundColor Green
-        Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins 
+        Add-RestoreOperators -M365GroupName $M365GroupName -M365GroupDesc $M365GroupDesc -TenantID $tenantID -MSOLAdmins $MSOLAdmins
       } else {
         Write-Host "Group already exists - Proceeding!" -ForegroundColor Green
       }
