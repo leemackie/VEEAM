@@ -10,7 +10,9 @@ $M365GroupDesc = "Group membership enables members to login to the 5G Networks V
 
 ######## STOP HERE ###########
 
-Start-Transcript -Path .\VBRRestorePortal_Log.txt -Append
+$timestamp = Get-Date -Format o | ForEach-Object { $_ -replace ":", "." }
+Start-Transcript -Path ".\Log\VBMRestoreOperators_$timestamp.txt" -Force
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Connect-AAD {
 
@@ -21,10 +23,10 @@ function Connect-AAD {
   )
 
   try {
-    Write-Verbose "Connecting to Microsoft Azure account"
+    Write-Host "Connecting to Microsoft Azure account"
     Connect-AzAccount -Tenant $tenantid -ErrorAction Stop | Out-Null
     $script:context = Get-AzContext
-    Write-Verbose "Connecting to Azure AD account"
+    Write-Host "Connecting to Azure AD account"
     Connect-AzureAD -TenantId $context.Tenant.TenantId -AccountId $context.Account.Id -ErrorAction Stop | Out-Null
     Write-Host "$($context.Account.Id) is now connected to Microsoft Azure for $($context.Tenant.Id)" -ForegroundColor Green
   }
@@ -105,7 +107,7 @@ function Connect-VB365RestorePortal {
   else {
     # creating link to Service Provider Enterprise Application
     try {
-      Write-Verbose "Creating new Azure AD Service Principal"
+      Write-Host "Creating new Azure AD Service Principal"
       $sp = New-AzureADServicePrincipal -AppId $ApplicationId -ErrorAction Stop
       Write-Host "$($sp.DisplayName) ($($sp.AppId)) has been linked your account" -ForegroundColor Green
     }
@@ -124,7 +126,7 @@ function Connect-VB365RestorePortal {
     'x-ms-correlation-id'    = New-Guid
   }
   $url = "https://main.iam.ad.ext.azure.com/api/RegisteredApplications/$($sp.AppId)/Consent?onBehalfOfAll=true"
-  Write-Verbose "Granting admin consent to the newly linked Azure AD Service Principal"
+  Write-Host "Granting admin consent to the newly linked Azure AD Service Principal"
 
   # loop waiting for change to actually take place
   while ($true) {
@@ -134,7 +136,7 @@ function Connect-VB365RestorePortal {
     }
     catch {
       Write-Host "Waiting to grant admin consent... (this can take up to 15 minutes)"
-      Write-Verbose "Error: $_"
+      Write-Host "Error: $_"
       Start-Sleep -Seconds 5
     }
   }
@@ -143,9 +145,9 @@ function Connect-VB365RestorePortal {
   Write-Warning "If you receive an error, wait 15 minutes and attempt login again."
 
   # logging out of remote sessions
-  Write-Verbose "Logging out of Azure AD account"
+  Write-Host "Logging out of Azure AD account"
   Disconnect-AzureAD | Out-Null
-  Write-Verbose "Logging out of Microsoft Azure account"
+  Write-Host "Logging out of Microsoft Azure account"
   Disconnect-AzAccount | Out-Null
 }
 
@@ -182,7 +184,7 @@ function Add-RestoreOperators {
   )
 
   # Setup security group for restore operators in M365
-  Write-Verbose "Setting up Restore Operators security group"
+  Write-Host "Setting up Restore Operators security group"
   New-MsolGroup -DisplayName $M365GroupName -Description $M365GroupDesc -TenantId $tenantid -OutVariable MSOLGroup -ErrorAction Stop
   Write-Host "Created $M365GroupName - Object ID: " $MSOLGroup.ObjectID -ForegroundColor Green
   # Add users to security group based on MSOLAdmins array
@@ -210,30 +212,32 @@ function Add-VBORestoreOperators {
 }
 
 Write-Host "Installing required PowerShell modules"
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Find-PackageProvider -Name Nuget -ForceBootstrap -IncludeDependencies -Force | Out-Null
 
 # Determine if Az.Account module is already present
 if ( -not(Get-Module -ListAvailable -Name Az.Accounts)){
-  Install-Module -Name Az.Accounts -SkipPublisherCheck -Force -ErrorAction Stop
+  Install-Module -Name Az.Accounts -SkipPublisherCheck -Force -ErrorAction Stop -Scope CurrentUser
   Write-Host "Az.Accounts module installed successfully" -ForegroundColor Green
 } else {
   Write-Host "Az.Accounts module already present" -ForegroundColor Green
+  Import-Module Az.Accounts
 }
 # Determine if AzureAd module is already present
 if ( -not(Get-Module -ListAvailable -Name AzureAd)){
-  Install-Module -Name AzureAD -SkipPublisherCheck -Force -ErrorAction Stop
+  Install-Module -Name AzureAD -SkipPublisherCheck -Force -ErrorAction Stop -Scope CurrentUser
   Write-Host "AzureAD module installed successfully" -ForegroundColor Green
 } else {
   Write-Host "AzureAD module already present" -ForegroundColor Green
+  Import-Module AzureAd
 }
 
 # Confirm that the MSOnline module is already present
 if ( -not(Get-Module -ListAvailable -Name MSOnline)){
-    Install-Module MSOnline -SkipPublisherCheck -Force -ErrorAction Stop
+    Install-Module MSOnline -SkipPublisherCheck -Force -ErrorAction Stop -Scope CurrentUser
     Write-Host "MSOnline module installed successfully" -ForegroundColor Green
 } else {
     Write-Host "MSOnline module already present" -ForegroundColor Green
+    Import-Module MSOnline
 }
 
 # Confirm that the VEEAM Archiver module is already present
@@ -242,12 +246,13 @@ if ( -not(Get-Module -ListAvailable -Name Veeam.Archiver.PowerShell)){
   $VBOPS = $false
 } else {
   Write-Host "VEEAM Archiver Powershell module already present" -ForegroundColor Green
+  Import-Module Veeam.Archiver.PowerShell
 }
 
 
 # Connect to the MS Online service
   try {
-    Write-Verbose "Connecting to Microsoft Online account"
+    Write-Host "Connecting to Microsoft Online account"
     Connect-MsolService -ErrorAction Stop | Out-Null
   }
   catch {
@@ -351,6 +356,6 @@ if ((Read-Host -Prompt "Would you like to import a CSV file? (Y/N)") -eq "Y") {
 }
 
 Write-Host "Process is now complete, if you observed any errors please remove any groups created and start script again." -ForegroundColor Green
-Write-Host "Output of this script was logged to VBRRestorePortal_Log.txt in the running directory." -ForegroundColor Gray
+Write-Host "Output of this script was logged to the Logs directory." -ForegroundColor Gray
 Stop-Transcript
 Pause
