@@ -164,9 +164,13 @@ $btnMigrate.Location             = New-Object System.Drawing.Point(180,230)
   function Set-CheckboxDisplay {
     if ($DropDownBoxType.SelectedItem -eq "User") {
       $chkMailbox.Visible = $true
+      $chkMailbox.Checked = $true
       $chkArchiveMailbox.Visible = $true
+      $chkArchiveMailbox.Checked = $true
       $chkOneDrive.Visible = $true
+      $chkOneDrive.Checked = $true
       $chkSite.Visible = $true
+      $chkSite.Checked = $true
       $chkGrpSite.Visible = $false
       $chkGrpMailbox.Visible = $false
     } elseif ($DropDownBoxType.SelectedItem -eq "Group") {
